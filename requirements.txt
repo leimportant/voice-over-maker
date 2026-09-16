@@ -1,5 +1,8 @@
 streamlit
+pocket-tts
 torch
-torchvision
-transformers
 scipy
+soundfile
+numpy
+streamlit-audiorecorder
+audioop-lts
