@@ -1,6 +1,8 @@
 streamlit
 pocket-tts
 torch
+torchvision
+transformers
 scipy
 soundfile
 numpy
