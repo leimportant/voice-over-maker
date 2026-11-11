@@ -6,7 +6,11 @@ import numpy as np
 import scipy.io.wavfile as wav
 import streamlit as st
 
-from audiorecorder import audiorecorder
+try:
+    from audiorecorder import audiorecorder
+except ModuleNotFoundError:
+    audiorecorder = None
+
 from pocket_tts import TTSModel
 
 
@@ -105,14 +109,18 @@ with st.spinner(
 
 st.subheader("🎤 1. Masukkan Suara Anda")
 
-voice_method = st.radio(
-    "Pilih sumber suara:",
-    [
-        "🎙️ Rekam dari Browser",
-        "📁 Upload Audio"
-    ],
-    horizontal=True
-)
+if audiorecorder is None:
+    st.warning("⚠️ Rekam dari browser dinonaktifkan karena package `streamlit-audiorecorder` belum terinstal. Silakan upload audio sebagai alternatif.")
+    voice_method = "📁 Upload Audio"
+else:
+    voice_method = st.radio(
+        "Pilih sumber suara:",
+        [
+            "🎙️ Rekam dari Browser",
+            "📁 Upload Audio"
+        ],
+        horizontal=True
+    )
 
 
 reference_audio = None
@@ -269,8 +277,28 @@ else:
 
 st.subheader("📝 2. Script Voice Over")
 
+uploaded_script = st.file_uploader(
+    "📄 Upload file script (.txt/.md)",
+    type=["txt", "md"],
+    help=(
+        "File teks ini akan otomatis dimasukkan ke kolom script. "
+        "Masih tetap perlu ada referensi suara (.wav/.mp3/.m4a/.ogg)."
+    )
+)
+
+script_default = ""
+if uploaded_script is not None:
+    raw_script = uploaded_script.read()
+    try:
+        script_default = raw_script.decode("utf-8")
+    except UnicodeDecodeError:
+        script_default = raw_script.decode("latin-1")
+
+    st.caption(f"File script terupload: {uploaded_script.name}")
+
 text = st.text_area(
     "Masukkan teks yang ingin dibacakan:",
+    value=script_default,
     height=220,
     placeholder=(
         "Contoh:\n\n"
