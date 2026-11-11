@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 
@@ -19,6 +20,23 @@ st.set_page_config(
     layout="centered"
 )
 
+# Remove the previous run's temporary reference file. Streamlit reruns this
+# script after widget changes, so a session can otherwise accumulate files.
+previous_reference = st.session_state.pop("reference_audio_path", None)
+if previous_reference and os.path.isfile(previous_reference):
+    os.remove(previous_reference)
+
+
+def save_reference_audio(audio_data, suffix):
+    with tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=suffix
+    ) as temp_audio:
+        temp_audio.write(audio_data)
+        st.session_state.reference_audio_path = temp_audio.name
+
+    return temp_audio.name
+
 
 # =========================================================
 # HEADER
@@ -27,8 +45,8 @@ st.set_page_config(
 st.title("🎙️ AI Voice Over Indonesia")
 
 st.write(
-    "Buat voice over Bahasa Indonesia menggunakan "
-    "suara Anda sendiri."
+    "Buat voice over Bahasa Indonesia dengan merekam "
+    "suara Anda atau mengunggah audio referensi."
 )
 
 st.caption(
@@ -118,65 +136,88 @@ if voice_method == "🎙️ Rekam dari Browser":
 
     if len(recorded_audio) > 0:
 
-        # Convert stereo/mono data
-        audio_array = np.array(
-            recorded_audio.get_array_of_samples()
-        )
-
         sample_width = recorded_audio.sample_width
+        channels = recorded_audio.channels
+        sample_rate = recorded_audio.frame_rate
 
-        if sample_width == 2:
-
-            audio_array = (
-                audio_array.astype(np.float32)
-                / 32768.0
-            )
-
-        elif sample_width == 1:
-
-            audio_array = (
-                audio_array.astype(np.float32)
-                - 128
-            ) / 128.0
-
+        if channels < 1 or sample_rate < 1:
+            st.error("Format rekaman tidak valid. Silakan rekam ulang.")
         else:
-
-            audio_array = audio_array.astype(
-                np.float32
+            samples = np.asarray(
+                recorded_audio.get_array_of_samples()
             )
 
-        # Convert stereo → mono
-        if recorded_audio.channels > 1:
+            sample_scales = {
+                1: 128.0,
+                2: 32768.0,
+                3: 8388608.0,
+                4: 2147483648.0
+            }
 
-            audio_array = audio_array.reshape(
-                -1,
-                recorded_audio.channels
-            ).mean(axis=1)
+            if sample_width not in sample_scales:
+                st.error(
+                    "Format sampel rekaman tidak didukung. "
+                    "Silakan rekam ulang atau upload file WAV."
+                )
+            elif samples.size == 0 or samples.size % channels != 0:
+                st.error("Data rekaman tidak lengkap. Silakan rekam ulang.")
+            else:
+                audio_array = (
+                    samples.astype(np.float32)
+                    / sample_scales[sample_width]
+                )
 
-        # Save temporary WAV
-        temp_voice = tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=".wav"
-        )
+                if channels > 1:
+                    audio_array = audio_array.reshape(
+                        -1,
+                        channels
+                    ).mean(axis=1)
 
-        reference_audio = temp_voice.name
+                audio_array = np.clip(audio_array, -1.0, 1.0)
+                duration = len(audio_array) / sample_rate
 
-        temp_voice.close()
+                if duration < 0.5:
+                    st.error(
+                        "Rekaman terlalu singkat. "
+                        "Silakan rekam setidaknya 5 detik."
+                    )
+                else:
+                    peak = float(np.max(np.abs(audio_array)))
+                    rms = float(np.sqrt(np.mean(np.square(audio_array))))
 
-        wav.write(
-            reference_audio,
-            recorded_audio.frame_rate,
-            audio_array
-        )
+                    if duration < 5 or duration > 30:
+                        st.warning(
+                            f"Durasi rekaman {duration:.1f} detik. "
+                            "Untuk hasil terbaik, gunakan 5–15 detik."
+                        )
 
-        st.success(
-            "✅ Rekaman berhasil."
-        )
+                    if rms < 0.005:
+                        st.warning(
+                            "Suara rekaman sangat pelan. "
+                            "Coba bicara lebih dekat ke mikrofon."
+                        )
+                    elif peak > 0.98:
+                        st.warning(
+                            "Suara rekaman mungkin pecah. "
+                            "Kurangi volume atau jauhkan mikrofon."
+                        )
 
-        st.audio(
-            reference_audio,
-            format="audio/wav"
-        )
+                    audio_buffer = io.BytesIO()
+                    wav.write(audio_buffer, sample_rate, audio_array)
+                    audio_data = audio_buffer.getvalue()
+                    reference_audio = save_reference_audio(
+                        audio_data,
+                        ".wav"
+                    )
+
+                    st.success(
+                        f"✅ Rekaman siap · {duration:.1f} detik"
+                    )
+
+                    st.audio(
+                        audio_data,
+                        format="audio/wav"
+                    )
 
 
 # =========================================================
@@ -201,29 +242,24 @@ else:
 
     if uploaded_voice is not None:
 
-        suffix = os.path.splitext(
-            uploaded_voice.name
-        )[1]
-
-        temp_voice = tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=suffix
+        suffix = os.path.splitext(uploaded_voice.name)[1].lower()
+        reference_audio = save_reference_audio(
+            uploaded_voice.getvalue(),
+            suffix
         )
-
-        temp_voice.write(
-            uploaded_voice.getbuffer()
-        )
-
-        temp_voice.close()
-
-        reference_audio = temp_voice.name
 
         st.success(
             f"✅ Audio diterima: {uploaded_voice.name}"
         )
 
         st.audio(
-            uploaded_voice
+            uploaded_voice.getvalue(),
+            format={
+                ".wav": "audio/wav",
+                ".mp3": "audio/mp3",
+                ".m4a": "audio/mp4",
+                ".ogg": "audio/ogg"
+            }.get(suffix, "audio/wav")
         )
 
 
@@ -343,113 +379,108 @@ if generate:
 
         try:
 
-            # Get voice characteristics
-            voice_state = (
-                model.get_state_for_audio_prompt(
-                    reference_audio
+            try:
+                # Get voice characteristics
+                voice_state = (
+                    model.get_state_for_audio_prompt(
+                        reference_audio
+                    )
                 )
-            )
 
-            # Generate
-            audio = model.generate_audio(
-                voice_state,
-                text
-            )
+                # Generate
+                audio = model.generate_audio(
+                    voice_state,
+                    text
+                )
 
-            # Convert tensor → numpy
-            audio_np = (
-                audio
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.float32)
-            )
-
-            # -------------------------------------------------
-            # NORMALIZE
-            # -------------------------------------------------
-
-            max_value = np.max(
-                np.abs(audio_np)
-            )
-
-            if max_value > 0:
-
+                # Convert tensor → numpy
                 audio_np = (
-                    audio_np / max_value
+                    audio
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32)
                 )
 
-            # -------------------------------------------------
-            # SAVE
-            # -------------------------------------------------
+                if audio_np.size == 0 or not np.isfinite(audio_np).all():
+                    raise ValueError(
+                        "Model menghasilkan audio kosong atau tidak valid."
+                    )
 
-            output_file = tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".wav"
-            )
+                # -------------------------------------------------
+                # NORMALIZE
+                # -------------------------------------------------
 
-            output_path = output_file.name
+                max_value = np.max(np.abs(audio_np))
 
-            output_file.close()
+                if max_value > 0:
+                    audio_np = audio_np / max_value
 
-            wav.write(
-                output_path,
-                model.sample_rate,
-                audio_np
-            )
+                # -------------------------------------------------
+                # ENCODE
+                # -------------------------------------------------
 
-            # -------------------------------------------------
-            # RESULT
-            # -------------------------------------------------
+                output_buffer = io.BytesIO()
+                wav.write(
+                    output_buffer,
+                    model.sample_rate,
+                    audio_np
+                )
+                output_data = output_buffer.getvalue()
 
-            duration = (
-                len(audio_np)
-                / model.sample_rate
-            )
+                # -------------------------------------------------
+                # RESULT
+                # -------------------------------------------------
 
-            st.success(
-                "✅ Voice Over berhasil dibuat!"
-            )
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-
-                st.metric(
-                    "⏱️ Durasi",
-                    f"{duration:.1f} detik"
+                duration = (
+                    len(audio_np)
+                    / model.sample_rate
                 )
 
-            with col2:
-
-                st.metric(
-                    "📝 Karakter",
-                    f"{len(text):,}"
+                st.success(
+                    "✅ Voice Over berhasil dibuat!"
                 )
 
-            st.audio(
-                output_path,
-                format="audio/wav"
-            )
+                col1, col2 = st.columns(2)
 
-            # -------------------------------------------------
-            # DOWNLOAD
-            # -------------------------------------------------
+                with col1:
 
-            with open(
-                output_path,
-                "rb"
-            ) as audio_file:
+                    st.metric(
+                        "⏱️ Durasi",
+                        f"{duration:.1f} detik"
+                    )
+
+                with col2:
+
+                    st.metric(
+                        "📝 Karakter",
+                        f"{len(text):,}"
+                    )
+
+                st.audio(
+                    output_data,
+                    format="audio/wav"
+                )
+
+                # -------------------------------------------------
+                # DOWNLOAD
+                # -------------------------------------------------
 
                 st.download_button(
                     label="⬇️ Download Voice Over",
-                    data=audio_file.read(),
-                    file_name=(
-                        "voice_over_indonesia.wav"
-                    ),
+                    data=output_data,
+                    file_name="voice_over_indonesia.wav",
                     mime="audio/wav",
                     use_container_width=True
                 )
+
+            finally:
+                temp_reference = st.session_state.pop(
+                    "reference_audio_path",
+                    None
+                )
+                if temp_reference and os.path.isfile(temp_reference):
+                    os.remove(temp_reference)
 
         except Exception as e:
 
@@ -499,4 +530,3 @@ Untuk produksi dengan banyak request, GPU akan tetap lebih nyaman.
 st.caption(
     "AI Voice Over Indonesia · Pocket TTS Indonesian"
 )
-
