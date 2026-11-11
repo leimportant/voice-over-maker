@@ -6,7 +6,11 @@ import scipy.io.wavfile as wav
 from scipy.signal import butter, sosfiltfilt, resample_poly
 import streamlit as st
 
-from audiorecorder import audiorecorder
+try:
+    from audiorecorder import audiorecorder
+except ModuleNotFoundError:
+    audiorecorder = None
+
 from pocket_tts import TTSModel
 
 
@@ -88,14 +92,18 @@ with st.spinner(
 
 st.subheader("🎤 1. Masukkan Suara Anda")
 
-voice_method = st.radio(
-    "Pilih sumber suara:",
-    [
-        "🎙️ Rekam dari Browser",
-        "📁 Upload Audio"
-    ],
-    horizontal=True
-)
+if audiorecorder is None:
+    st.warning("⚠️ Rekam dari browser dinonaktifkan karena package `streamlit-audiorecorder` belum terinstal. Silakan upload audio sebagai alternatif.")
+    voice_method = "📁 Upload Audio"
+else:
+    voice_method = st.radio(
+        "Pilih sumber suara:",
+        [
+            "🎙️ Rekam dari Browser",
+            "📁 Upload Audio"
+        ],
+        horizontal=True
+    )
 
 
 reference_audio = None
