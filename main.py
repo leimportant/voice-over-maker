@@ -229,6 +229,10 @@ if generate:
                 audio = model.generate_audio(voice_state, text)
 
                 audio_np = audio.detach().cpu().numpy().astype(np.float32)
+                if audio_np.ndim == 2:
+                    audio_np = audio_np[0] if audio_np.shape[0] == 1 else audio_np.T
+                elif audio_np.ndim != 1:
+                    raise ValueError("Model menghasilkan format audio yang tidak didukung.")
 
                 if audio_np.size == 0 or not np.isfinite(audio_np).all():
                     raise ValueError("Model menghasilkan audio kosong atau tidak valid.")
