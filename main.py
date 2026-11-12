@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+from threading import Lock
 
 import numpy as np
 import scipy.io.wavfile as wav
@@ -19,7 +20,7 @@ from pocket_tts import TTSModel
 # =========================================================
 
 st.set_page_config(
-    page_title="AI Voice Over Indonesia",
+    page_title="AI Voice Over",
     page_icon="🎙️",
     layout="centered",
 )
@@ -56,6 +57,11 @@ def load_model():
     return TTSModel.load_model(config=MODEL_CONFIG)
 
 
+@st.cache_resource
+def get_generation_lock():
+    return Lock()
+
+
 with st.spinner("⏳ Memuat model AI Voice Cloning..."):
     try:
         model = load_model()
@@ -65,12 +71,57 @@ with st.spinner("⏳ Memuat model AI Voice Cloning..."):
         st.exception(e)
         st.stop()
 
+st.session_state.setdefault("voice_temperature", float(model.temp))
+st.session_state.setdefault("voice_eos_threshold", float(model.eos_threshold))
+generation_lock = get_generation_lock()
+
+
+@st.dialog("Pengaturan suara", icon=":material/settings:")
+def show_voice_settings():
+    st.caption("Pengaturan ini diterapkan saat membuat voice over berikutnya.")
+
+    with st.form("voice_generation_settings"):
+        st.slider(
+            "Temperature",
+            min_value=0.0,
+            max_value=2.0,
+            step=0.1,
+            help="Nilai lebih tinggi memberi variasi suara lebih besar.",
+            key="voice_temperature",
+        )
+        st.slider(
+            "EOS threshold",
+            min_value=-10.0,
+            max_value=5.0,
+            step=0.1,
+            help="Nilai lebih tinggi membuat model cenderung menghasilkan audio lebih panjang.",
+            key="voice_eos_threshold",
+        )
+        if st.form_submit_button(
+            "Simpan",
+            type="primary",
+            key="save_voice_settings",
+        ):
+            st.rerun()
+
 
 # =========================================================
 # HEADER
 # =========================================================
 
-st.title("🎙️ AI Voice Over Indonesia")
+title_col, settings_col = st.columns([7, 2], vertical_alignment="center")
+with title_col:
+    st.title("🎙️ AI Voice Over Indonesia")
+with settings_col:
+    if st.button(
+        "Pengaturan",
+        icon=":material/settings:",
+        type="tertiary",
+        help="Atur temperature dan EOS threshold",
+        key="open_voice_settings",
+    ):
+        show_voice_settings()
+
 st.write("Buat voice over Bahasa Indonesia dengan suara referensi Anda.")
 st.caption("Gunakan hanya suara milik Anda sendiri atau suara yang Anda punya izin untuk gunakan.")
 
@@ -225,8 +276,11 @@ if generate:
     with st.spinner("🎙️ AI sedang membuat voice over dengan referensi suara..."):
         try:
             try:
-                voice_state = model.get_state_for_audio_prompt(reference_audio)
-                audio = model.generate_audio(voice_state, text)
+                with generation_lock:
+                    model.temp = st.session_state.voice_temperature
+                    model.eos_threshold = st.session_state.voice_eos_threshold
+                    voice_state = model.get_state_for_audio_prompt(reference_audio)
+                    audio = model.generate_audio(voice_state, text)
 
                 audio_np = audio.detach().cpu().numpy().astype(np.float32)
                 if audio_np.ndim == 2:
